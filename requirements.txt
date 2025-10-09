@@ -1,0 +1,4 @@
+streamlit>=1.33,<2
+Pillow>=10.2,<12
+pillow-heif>=0.16,<2
+PyMuPDF>=1.25,<1.27
