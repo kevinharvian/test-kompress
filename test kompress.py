@@ -405,16 +405,17 @@ if st.session_state["results"] is not None:
             grand_cnt += len(items)
 
     st.write("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Total file OK di bawah target", grand_ok)
-    with col2:
-        st.metric("Total file diproses", grand_cnt)
-
-    st.download_button(
-        "⬇️ Download Master ZIP",
-        data=st.session_state["results"]["master_bytes"],
-        file_name=(MASTER_ZIP_NAME.strip() or "compressed.zip"),
+with st.container():
+    st.subheader("Unduh Master ZIP")
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        st.download_button(
+            "⬇️ Download Master ZIP",
+            data=st.session_state["results"]["master_bytes"],
+            file_name=(MASTER_ZIP_NAME.strip() or "compressed.zip"),
+            mime="application/zip",
+        )
+    st.caption("Gunakan tombol di sidebar untuk menghapus hasil bila perlu.") or "compressed.zip"),
         mime="application/zip",
     )
 
