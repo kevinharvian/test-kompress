@@ -145,34 +145,6 @@ def gif_first_frame(im: Image.Image) -> Image.Image:
     return im.convert("RGBA") if im.mode == "P" else im
 
 
-def compress_into_range(base_img: Image.Image, max_kb: int, min_side_px: int, scale_min: float, do_sharpen: bool, sharpen_amount: float):
-    base = to_rgb_flat(base_img)
-    data, q = try_quality_bs(base, max_kb)
-    if data is not None and len(data) <= max_kb * 1024:
-        return data, 1.0, q, len(data)
-    lo, hi = scale_min, 1.0
-    best_pack = None
-    max_steps = 8 if SPEED_PRESET == "fast" else 12
-    for _ in range(max_steps):
-        mid = (lo + hi) / 2
-        candidate = resize_to_scale(base, mid, do_sharpen, sharpen_amount)
-        candidate = ensure_min_side(candidate, min_side_px, do_sharpen, sharpen_amount)
-        d, q2 = try_quality_bs(candidate, max_kb)
-        if d is not None and len(d) <= max_kb * 1024:
-            best_pack = (d, mid, q2, len(d))
-            lo = mid + (hi - mid) * 0.35
-        else:
-            hi = mid - (mid - lo) * 0.35
-        if hi - lo < 1e-3:
-            break
-    if best_pack:
-        return best_pack
-    smallest = resize_to_scale(base, scale_min, do_sharpen, sharpen_amount)
-    smallest = ensure_min_side(smallest, min_side_px, do_sharpen, sharpen_amount)
-    d = save_jpg_bytes(smallest, MIN_QUALITY)
-    return d, scale_min, MIN_QUALITY, len(d)
-
-
 def pdf_bytes_to_images(pdf_bytes: bytes, dpi: int) -> List[Image.Image]:
     images = []
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
@@ -226,29 +198,47 @@ def process_one_file_entry(relpath: Path, raw_bytes: bytes, input_root_label: st
         skipped.append((str(relpath), str(e)))
     return input_root_label, processed, skipped, outputs
 
+
+def compress_into_range(base_img, max_kb, min_side_px, scale_min, do_sharpen, sharpen_amount):
+    base = to_rgb_flat(base_img)
+    data, q = try_quality_bs(base, max_kb)
+    if data and len(data) <= max_kb * 1024:
+        return data, 1.0, q, len(data)
+    lo, hi = scale_min, 1.0
+    best_pack = None
+    for _ in range(10):
+        mid = (lo + hi) / 2
+        candidate = resize_to_scale(base, mid, do_sharpen, sharpen_amount)
+        candidate = ensure_min_side(candidate, min_side_px, do_sharpen, sharpen_amount)
+        d, q2 = try_quality_bs(candidate, max_kb)
+        if d and len(d) <= max_kb * 1024:
+            best_pack = (d, mid, q2, len(d))
+            lo = mid + 0.1
+        else:
+            hi = mid - 0.1
+    if best_pack:
+        return best_pack
+    smallest = resize_to_scale(base, scale_min, do_sharpen, sharpen_amount)
+    smallest = ensure_min_side(smallest, min_side_px, do_sharpen, sharpen_amount)
+    d = save_jpg_bytes(smallest, MIN_QUALITY)
+    return d, scale_min, MIN_QUALITY, len(d)
+
+
 # ==========================
-# UI UPLOAD
+# UI UPLOAD DAN PROSES
 # ==========================
 st.subheader("1) Upload ZIP atau File Lepas")
-allowed_exts_for_uploader = sorted({e.lstrip('.') for e in IMG_EXT.union(PDF_EXT)} | {"zip"})
-uploaded_files = st.file_uploader(
-    "Upload beberapa ZIP (gambar/PDF). Video ditolak otomatis.",
-    type=allowed_exts_for_uploader,
-    accept_multiple_files=True,
-    key=f"uploader_{st.session_state['uploader_key']}",
-)
+allowed_exts = sorted({e.lstrip('.') for e in IMG_EXT.union(PDF_EXT)} | {"zip"})
+uploaded_files = st.file_uploader("Upload beberapa ZIP (gambar/PDF).", type=allowed_exts, accept_multiple_files=True, key=f"upload_{st.session_state['uploader_key']}")
 
-col_run, col_reset = st.columns([3, 1])
-with col_run:
+col1, col2 = st.columns([3, 1])
+with col1:
     run = st.button("🚀 Proses & Buat Master ZIP", type="primary", disabled=not uploaded_files)
-with col_reset:
+with col2:
     if st.button("↺ Reset upload"):
         st.session_state["uploader_key"] += 1
         st.rerun()
 
-# ==========================
-# PROSES
-# ==========================
 if run:
     if not uploaded_files:
         st.warning("Silakan upload minimal satu file.")
@@ -293,10 +283,8 @@ if run:
             jobs.append({"label": base_label, "items": items})
 
     if not jobs:
-        st.error("Tidak ada file valid (gambar/PDF atau ZIP berisi file tersebut).")
+        st.error("Tidak ada file valid.")
         st.stop()
-
-    st.write(f"🔧 Ditemukan **{sum(len(j['items']) for j in jobs)}** file dari **{len(jobs)}** input.")
 
     summary, skipped_all = defaultdict(list), defaultdict(list)
     master_buf = io.BytesIO()
@@ -305,13 +293,13 @@ if run:
     with zipfile.ZipFile(master_buf, "w", compression=ZIP_COMP_ALGO) as master:
         top_folders = {}
         for job in jobs:
-            top = f\"{job['label']}_compressed\"
+            top = f"{job['label']}_compressed"
             top_folders[job['label']] = top
-            master.writestr(f\"{top}/\", \"\")
+            master.writestr(f"{top}/", "")
 
         def add_to_zip(folder, rel_path, data):
             with zip_lock:
-                master.writestr(f\"{folder}/{rel_path}\", data)
+                master.writestr(f"{folder}/{rel_path}", data)
 
         def worker(label, relp, raw):
             return process_one_file_entry(relp, raw, label)
