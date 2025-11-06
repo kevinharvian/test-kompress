@@ -35,9 +35,9 @@ with st.sidebar:
     SHARPEN_AMOUNT = st.slider("Sharpen amount", 0.0, 2.0, 1.0, 0.1)
     PDF_DPI = 150 if SPEED_PRESET == "fast" else 200
     MASTER_ZIP_NAME = st.text_input("Nama master ZIP", "compressed.zip")
-    st.markdown("**Target otomatis:**")
-    st.markdown("- File **q, w, e** → **≤198 KB**")
-    st.markdown("- File lainnya → **≤138 KB**")
+    st.markdown("Target otomatis:")
+    st.markdown("- File q, w, e → ≤198 KB")
+    st.markdown("- File lainnya → ≤138 KB")
     st.divider()
     if st.session_state["results"] is not None:
         if st.button("🗑️ Hapus semua hasil kompres", type="secondary"):
@@ -56,13 +56,10 @@ TARGET_KB_LOW = 138
 IMG_EXT = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".heic", ".heif"}
 PDF_EXT = {".pdf"}
 ALLOW_ZIP = True
-VIDEO_EXT = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".3gp", ".wmv", ".flv", ".mpg", ".mpeg"}
 
 def get_target_size_for_path(relpath: Path) -> int:
-    filename_lower = relpath.stem.lower()
-    if filename_lower in ["q", "w", "e"]:
-        return TARGET_KB_HIGH
-    return TARGET_KB_LOW
+    name = relpath.stem.lower()
+    return TARGET_KB_HIGH if name in ["q", "w", "e"] else TARGET_KB_LOW
 
 def maybe_sharpen(img: Image.Image, do_it=True, amount=1.0) -> Image.Image:
     if not do_it or amount <= 0:
@@ -126,7 +123,6 @@ def gif_first_frame(im: Image.Image) -> Image.Image:
 
 def compress_into_range(base_img: Image.Image, max_kb: int, min_side_px: int, scale_min: float, do_sharpen: bool, sharpen_amount: float):
     base = to_rgb_flat(base_img)
-
     data, q = try_quality_bs(base, max_kb)
     if data is not None and len(data) <= max_kb * 1024:
         result = (data, 1.0, q, len(data))
@@ -146,7 +142,6 @@ def compress_into_range(base_img: Image.Image, max_kb: int, min_side_px: int, sc
                 hi = mid - (mid - lo) * 0.35
             if hi - lo < 1e-3:
                 break
-
         if best_pack is None:
             smallest = resize_to_scale(base, scale_min, do_sharpen, sharpen_amount)
             smallest = ensure_min_side(smallest, min_side_px, do_sharpen, sharpen_amount)
@@ -154,7 +149,6 @@ def compress_into_range(base_img: Image.Image, max_kb: int, min_side_px: int, sc
             result = (d, scale_min, MIN_QUALITY, len(d))
         else:
             result = best_pack
-
     data, scale_used, q_used, size_b = result
 
     if size_b > max_kb * 1024:
@@ -191,13 +185,7 @@ def pdf_bytes_to_images(pdf_bytes: bytes, dpi: int) -> List[Image.Image]:
     images = []
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
         for page in doc:
-            rect = page.rect
-            long_inch = max(rect.width, rect.height) / 72.0
-            target_long_px = 2000
-            dpi_eff = int(min(max(dpi, 72), max(72, target_long_px / max(long_inch, 1e-6))))
-            zoom = dpi_eff / 72.0
-            mat = fitz.Matrix(zoom, zoom)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
+            pix = page.get_pixmap(matrix=fitz.Matrix(dpi/72.0, dpi/72.0), alpha=False)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             images.append(ImageOps.exif_transpose(img))
     return images
@@ -221,23 +209,18 @@ def process_one_file_entry(relpath: Path, raw_bytes: bytes, input_root_label: st
     processed: List[Tuple[str, int, float, int, bool, int]] = []
     outputs: Dict[str, bytes] = {}
     skipped: List[Tuple[str, str]] = []
-
     ext = relpath.suffix.lower()
     target_kb = get_target_size_for_path(relpath)
-
     try:
         if ext in PDF_EXT:
             pages = pdf_bytes_to_images(raw_bytes, dpi=PDF_DPI)
             for idx, pil_img in enumerate(pages, start=1):
-                try:
-                    data, scale, q, size_b = compress_into_range(
-                        pil_img, target_kb, MIN_SIDE_PX, SCALE_MIN, SHARPEN_ON_RESIZE, SHARPEN_AMOUNT
-                    )
-                    out_rel = relpath.with_suffix("").as_posix() + f"_p{idx}.jpg"
-                    outputs[out_rel] = data
-                    processed.append((out_rel, size_b, scale, q, size_b <= target_kb * 1024, target_kb))
-                except Exception as e:
-                    skipped.append((f"{relpath} (page {idx})", str(e)))
+                data, scale, q, size_b = compress_into_range(
+                    pil_img, target_kb, MIN_SIDE_PX, SCALE_MIN, SHARPEN_ON_RESIZE, SHARPEN_AMOUNT
+                )
+                out_rel = relpath.with_suffix("").as_posix() + f"_p{idx}.jpg"
+                outputs[out_rel] = data
+                processed.append((out_rel, size_b, scale, q, size_b <= target_kb * 1024, target_kb))
         elif ext in IMG_EXT and (ext not in {".heic", ".heif"} or HEIF_OK):
             im = load_image_from_bytes(relpath.name, raw_bytes)
             if ext == ".gif":
@@ -245,7 +228,7 @@ def process_one_file_entry(relpath: Path, raw_bytes: bytes, input_root_label: st
             data, scale, q, size_b = compress_into_range(
                 im, target_kb, MIN_SIDE_PX, SCALE_MIN, SHARPEN_ON_RESIZE, SHARPEN_AMOUNT
             )
-            out_rel = Path(relpath.with_suffix(".jpg").as_posix()).as_posix()
+            out_rel = relpath.with_suffix(".jpg").as_posix()
             outputs[out_rel] = data
             processed.append((out_rel, size_b, scale, q, size_b <= target_kb * 1024, target_kb))
         elif ext in {".heic", ".heif"} and not HEIF_OK:
@@ -256,10 +239,9 @@ def process_one_file_entry(relpath: Path, raw_bytes: bytes, input_root_label: st
     return input_root_label, processed, skipped, outputs
 
 st.subheader("1) Upload ZIP atau File Lepas")
-allowed_exts_for_uploader = sorted({e.lstrip(".") for e in IMG_EXT.union(PDF_EXT)} | ({"zip"} if ALLOW_ZIP else set()))
-
+allowed_exts_for_uploader = sorted({e.lstrip('.') for e in IMG_EXT.union(PDF_EXT)} | {"zip"})
 uploaded_files = st.file_uploader(
-    "Upload beberapa ZIP (berisi folder/gambar/PDF) dan/atau file lepas (gambar/PDF). Video ditolak otomatis.",
+    "Upload beberapa ZIP (gambar/PDF).",
     type=allowed_exts_for_uploader,
     accept_multiple_files=True,
     key=f"uploader_{st.session_state['uploader_key']}",
@@ -319,16 +301,17 @@ if run:
             jobs.append({"label": base_label, "items": items})
 
     if not jobs:
-        st.error("Tidak ada berkas valid (butuh gambar/PDF, atau ZIP berisi file-file tersebut).")
+        st.error("Tidak ada file valid.")
         st.stop()
 
-    st.write(f"🔧 Ditemukan **{sum(len(j['items']) for j in jobs)}** berkas dari **{len(jobs)}** input.")
+    st.write(f"🔧 Ditemukan {sum(len(j['items']) for j in jobs)} file dari {len(jobs)} input.")
 
     summary: Dict[str, List[Tuple[str, int, float, int, bool, int]]] = defaultdict(list)
     skipped_all: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
 
     master_buf = io.BytesIO()
-    zip_write_lock = threading.Lock()
+    zip_lock = threading.Lock()
+
     with zipfile.ZipFile(master_buf, "w", compression=ZIP_COMP_ALGO) as master:
         top_folders: Dict[str, str] = {}
         for job in jobs:
@@ -337,9 +320,9 @@ if run:
             master.writestr(f"{top}/", "")
 
         def add_to_master_zip_threadsafe(top_folder: str, rel_path: str, data: bytes):
-            rel_path_std = str(Path(rel_path).with_suffix(".jpg")) if not rel_path.lower().endswith(".jpg") else rel_path
-            with zip_write_lock:
-                master.writestr(f"{top_folder}/{rel_path_std}", data)
+            rel_std = str(Path(rel_path).with_suffix(".jpg")) if not rel_path.lower().endswith(".jpg") else rel_path
+            with zip_lock:
+                master.writestr(f"{top_folder}/{rel_std}", data)
 
         def worker(label: str, relp: Path, raw: bytes):
             return process_one_file_entry(relp, raw, label)
@@ -362,63 +345,51 @@ if run:
                 progress.progress(min(done / total, 1.0))
 
     master_buf.seek(0)
-
     st.session_state["results"] = {
         "jobs": jobs,
         "summary": summary,
-        "skipped_all": skipped_all,
-        "master_bytes": master_buf.getvalue(),
+        "skipped": skipped_all,
+        "master": master_buf.getvalue(),
     }
 
-if st.session_state["results"] is not None:
+if st.session_state["results"]:
     jobs = st.session_state["results"]["jobs"]
     summary = st.session_state["results"]["summary"]
-    skipped_all = st.session_state["results"]["skipped_all"]
+    skipped_all = st.session_state["results"]["skipped"]
 
-    st.subheader("📊 Ringkasan Hasil & Unduh")
-    grand_ok, grand_cnt = 0, 0
+    st.subheader("Ringkasan Hasil & Unduh")
     MAX_ROWS_PER_JOB = 300
 
     for job in jobs:
         base = job["label"]
         items = summary[base]
         skipped = skipped_all[base]
-        with st.expander(f"📦 {base} — {len(items)} file diproses, {len(skipped)} dilewati/errored", expanded=False):
-            ok = 0
+        with st.expander(f"{base} — {len(items)} file diproses, {len(skipped)} dilewati", expanded=False):
             shown = 0
             for name, size_b, scale, q, in_range, target_kb in items:
                 if shown >= MAX_ROWS_PER_JOB:
                     break
                 kb = size_b / 1024
                 flag = "✅" if in_range else "⚠️"
-                st.write(f"{flag} `{name}` → **{kb:.1f} KB** (target: ≤{target_kb} KB) | scale≈{scale:.3f} | quality={q}")
-                ok += 1 if in_range else 0
+                st.write(f"{flag} `{name}` → {kb:.1f} KB (≤{target_kb} KB) | scale≈{scale:.3f} | quality={q}")
                 shown += 1
             extra = len(items) - shown
             if extra > 0:
-                st.caption(f"(+{extra} baris lainnya disembunyikan untuk menjaga performa UI)")
+                st.caption(f"(+{extra} baris disembunyikan)")
             if skipped:
-                st.write("**Dilewati/Errored:**")
+                st.write("Dilewati/Errored:")
                 for n, reason in skipped[:50]:
                     st.write(f"- {n}: {reason}")
-            st.caption(f"Berhasil di bawah target: **{ok}/{len(items)}**")
-            grand_ok += ok
-            grand_cnt += len(items)
 
     st.write("---")
-with st.container():
-    st.subheader("Unduh Master ZIP")
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
-        st.download_button(
-            "⬇️ Download Master ZIP",
-            data=st.session_state["results"]["master_bytes"],
-            file_name=(MASTER_ZIP_NAME.strip() or "compressed.zip"),
-            mime="application/zip",
-        )
-    st.caption("Gunakan tombol di sidebar untuk menghapus hasil bila perlu.") or "compressed.zip"),
-        mime="application/zip",
-    )
-
-else:
-    st.info("Belum ada hasil. Upload file lalu jalankan proses.")
+    with st.container():
+        st.subheader("Unduh Master ZIP")
+        _, c2, _ = st.columns([1, 2, 1])
+        with c2:
+            st.download_button(
+                "⬇️ Download Master ZIP",
+                data=st.session_state["results"]["master"],
+                file_name=(MASTER_ZIP_NAME.strip() or "compressed.zip"),
+                mime="application/zip"
+            )
+        st.caption("Gunakan tombol di sidebar untuk menghapus hasil bila perlu.")
